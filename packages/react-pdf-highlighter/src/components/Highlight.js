@@ -5,6 +5,8 @@ import React, { Component } from "react";
 import "../style/Highlight.css";
 
 import type { T_LTWH } from "../types.js";
+import TransformWrapper from "./TransformWrapper";
+import { getEmojiStyle } from '../lib/coordinates';
 
 type Props = {
   position: {
@@ -18,7 +20,9 @@ type Props = {
     emoji: string,
     text: string
   },
-  isScrolledTo: boolean
+  isScrolledTo: boolean,
+  rotate: number,
+  scale: number
 };
 
 class Highlight extends Component<Props> {
@@ -29,7 +33,9 @@ class Highlight extends Component<Props> {
       onMouseOver,
       onMouseOut,
       comment,
-      isScrolledTo
+      isScrolledTo,
+      rotate,
+      scale
     } = this.props;
 
     const { rects, boundingRect } = position;
@@ -41,10 +47,7 @@ class Highlight extends Component<Props> {
         {comment ? (
           <div
             className="Highlight__emoji"
-            style={{
-              left: 20,
-              top: boundingRect.top
-            }}
+            style={getEmojiStyle(boundingRect, rotate)}
           >
             {comment.emoji}
           </div>

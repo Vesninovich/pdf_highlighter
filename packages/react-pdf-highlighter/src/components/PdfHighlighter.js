@@ -111,9 +111,11 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
   debouncedAfterSelection: () => void;
 
   componentDidUpdate(prevProps: Props<T_HT>) {
-    if (prevProps.highlights !== this.props.highlights ||
-        prevProps.rotate !== this.props.rotate ||
-        prevProps.scale !== this.props.scale) {
+    if (
+      prevProps.highlights !== this.props.highlights ||
+      prevProps.rotate !== this.props.rotate ||
+      prevProps.scale !== this.props.scale
+    ) {
       this.renderHighlights(this.props);
     }
   }
@@ -128,10 +130,8 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
       container: this.containerNode,
       enhanceTextSelection: true,
       removePageBorders: true,
-      useOnlyCssZoom : true,
       linkService: this.linkService,
-      scale:1
-
+      scale: 1
     });
 
     this.viewer.setDocument(pdfDocument);
@@ -175,7 +175,6 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
     highlights: Array<T_HT>
   ): { [pageNumber: string]: Array<T_HT> } {
     const { ghostHighlight } = this.state;
-
     return [...highlights, ghostHighlight]
       .filter(Boolean)
       .reduce((res, highlight) => {
@@ -211,11 +210,25 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
     usePdfCoordinates
   }: T_ScaledPosition): T_Position {
     const viewport = this.viewer.getPageView(pageNumber - 1).viewport;
+    const currentScale = this.viewer.currentScaleValue;
+    const pagesRotation = this.viewer.pagesRotation;
 
     return {
-      boundingRect: scaledToViewport(boundingRect, viewport, usePdfCoordinates),
+      boundingRect: scaledToViewport(
+        boundingRect,
+        viewport,
+        +currentScale,
+        pagesRotation,
+        usePdfCoordinates
+      ),
       rects: (rects || []).map(rect =>
-        scaledToViewport(rect, viewport, usePdfCoordinates)
+        scaledToViewport(
+          rect,
+          viewport,
+          +currentScale,
+          pagesRotation,
+          usePdfCoordinates
+        )
       ),
       pageNumber
     };
@@ -227,20 +240,25 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
     rects
   }: T_Position): T_ScaledPosition {
     const viewport = this.viewer.getPageView(pageNumber - 1).viewport;
-
+    const currentScaleValue = +this.viewer.currentScaleValue;
+    const pagesRotation = this.viewer.pagesRotation;
     return {
-      boundingRect: viewportToScaled(boundingRect, viewport),
-      rects: (rects || []).map(rect => viewportToScaled(rect, viewport)),
+      boundingRect: viewportToScaled(
+        boundingRect,
+        viewport,
+        currentScaleValue,
+        pagesRotation
+      ),
+      rects: (rects || []).map(rect =>
+        viewportToScaled(rect, viewport, currentScaleValue, pagesRotation)
+      ),
       pageNumber
     };
   }
 
-  scale(scale,relativeRotation) {
-    const currentPageNumber = this.viewer._currentPageNumber;
-    const currentPage = this.viewer.getPageView(currentPageNumber - 1).div
-
-    var cssTransform = 'rotate(' + relativeRotation + 'deg) ' + 'scale(' + scale + ',' + scale + ')';
-    currentPage.style.transform = cssTransform;
+  scale(scale, relativeRotation) {
+    this.viewer.currentScaleValue = scale;
+    this.viewer.pagesRotation = relativeRotation;
   }
 
   screenshot(position: T_LTWH, pageNumber: number) {
@@ -249,9 +267,10 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
   }
 
   renderHighlights(nextProps?: Props<T_HT>) {
-    const { highlightTransform, highlights, rotate, scale } = nextProps || this.props;
+    const { highlightTransform, highlights, rotate, scale, onSelectionFinished } =
+      nextProps || this.props;
 
-    this.scale(scale,rotate);
+    this.scale(scale, rotate);
 
     const { pdfDocument } = this.props;
 
@@ -264,13 +283,15 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
 
       if (highlightLayer) {
         ReactDom.render(
-          <div>
+          <div className="full-size">
             {(highlightsByPage[String(pageNumber)] || []).map(
               (highlight, index) => {
-                const { position, ...rest } = highlight;
+                const { position, tipPosition, content, id, ...rest } = highlight;
 
                 const viewportHighlight = {
                   position: this.scaledPositionToViewport(position),
+                  content,
+                  id,
                   ...rest
                 };
 
@@ -281,6 +302,19 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
                 const isScrolledTo = Boolean(
                   scrolledToHighlightId === highlight.id
                 );
+
+                // if ghost highlight
+                if (!id) {
+                  this.renderTipAtPosition(
+                    viewportHighlight.position,
+                    onSelectionFinished(
+                      position,
+                      content,
+                      () => this.hideTipAndSelection(),
+                      () => {}
+                    )
+                  );
+                }
 
                 return highlightTransform(
                   viewportHighlight,
@@ -296,7 +330,14 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
                   rect => {
                     const viewport = this.viewer.getPageView(pageNumber - 1)
                       .viewport;
-                    return viewportToScaled(rect, viewport);
+                    const currentScaleValue = +this.viewer.currentScaleValue;
+                    const pagesRotation = this.viewer.pagesRotation;
+                    return viewportToScaled(
+                      rect,
+                      viewport,
+                      currentScaleValue,
+                      pagesRotation
+                    );
                   },
                   boundingRect => this.screenshot(boundingRect, pageNumber),
                   isScrolledTo
@@ -323,7 +364,7 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
     );
   };
 
-  renderTipAtPosition(position: T_Position, inner: ?React$Element<*>) {
+  renderTipAtPosition(position: T_ScaledPosition | T_Position, inner: ?React$Element<*>) {
     const { boundingRect, pageNumber } = position;
 
     const page = {
@@ -337,15 +378,18 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
       "PdfHighlighter__tip-layer"
     );
 
+    const isDefined = val => val !== null && val !== undefined;
+    const left = isDefined(boundingRect.left) ? boundingRect.left : boundingRect.x1;
+    const top = isDefined(boundingRect.top) ? boundingRect.top : boundingRect.y1;
+
     ReactDom.render(
       <TipContainer
         scrollTop={this.viewer.container.scrollTop}
         pageBoundingRect={pageBoundingRect}
         style={{
-          left:
-            page.node.offsetLeft + boundingRect.left + boundingRect.width / 2,
-          top: boundingRect.top + page.node.offsetTop,
-          bottom: boundingRect.top + page.node.offsetTop + boundingRect.height
+          left: page.node.offsetLeft + left + boundingRect.width / 2,
+          top: top + page.node.offsetTop,
+          bottom: top + page.node.offsetTop + boundingRect.height
         }}
         children={inner}
       />,
@@ -364,20 +408,77 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
 
     const pageViewport = this.viewer.getPageView(pageNumber - 1).viewport;
 
+    // console.log("pageview:" + JSON.stringify(this.viewer.getPageView(pageNumber - 1).pageViewport.height))
     const scrollMargin = 10;
+
+    let currentScaleValue = +this.viewer.currentScaleValue;
+    let pagesRotation = this.viewer.pagesRotation;
+    let x = 0;
+    let y =
+      scaledToViewport(
+        boundingRect,
+        pageViewport,
+        currentScaleValue,
+        pagesRotation,
+        usePdfCoordinates
+      ).top - scrollMargin;
+    let convertToPdfPoint = pageViewport.convertToPdfPoint(x, y);
+    if (pagesRotation === undefined || pagesRotation === 0) {
+      convertToPdfPoint = pageViewport.convertToPdfPoint(x, y);
+    } else if (pagesRotation === 90 || pagesRotation === -90) {
+      convertToPdfPoint = pageViewport.convertToPdfPoint(y, x);
+    } else if (pagesRotation === -180 || pagesRotation === 180) {
+      // debugger;
+      // let height = this.viewer.getPageView(pageNumber - 1).pageViewport.height;
+      // console.log("height:" + height)
+      convertToPdfPoint = pageViewport.convertToPdfPoint(x, y);
+    }
+
+    let offset = 0;
+    // Deprecated
+    switch (pagesRotation) {
+      case 0:
+        offset = [
+          boundingRect.x1,
+          boundingRect.height - boundingRect.y1 - scrollMargin
+        ];
+        break;
+      case 90:
+        offset = [
+          boundingRect.x1 - 150, //150 - offset page with header height
+          boundingRect.height - boundingRect.y1
+        ];
+
+        break;
+      case -180:
+        offset = [
+          boundingRect.width - boundingRect.x2,
+          boundingRect.height - boundingRect.y2 - boundingRect.height / 2
+        ];
+        break;
+      case 180:
+        offset = [
+          boundingRect.width - boundingRect.x2,
+          boundingRect.height - boundingRect.y2 - boundingRect.height / 2
+        ];
+        break;
+      case -90:
+        offset = [
+          boundingRect.x2, //150 - offset page with header height
+          boundingRect.height - boundingRect.y1
+        ];
+        break;
+    }
 
     this.viewer.scrollPageIntoView({
       pageNumber,
       destArray: [
         null,
         { name: "XYZ" },
-        ...pageViewport.convertToPdfPoint(
-          0,
-          scaledToViewport(boundingRect, pageViewport, usePdfCoordinates).top -
-            scrollMargin
-        ),
-        0
-      ]
+        ...convertToPdfPoint,
+        currentScaleValue
+      ],
+      allowNegativeOffset: false
     });
 
     this.setState(
@@ -485,21 +586,11 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
       text: range.toString()
     };
     const scaledPosition = this.viewportPositionToScaled(viewportPosition);
-
-    this.renderTipAtPosition(
-      viewportPosition,
-      onSelectionFinished(
-        scaledPosition,
-        content,
-        () => this.hideTipAndSelection(),
-        () =>
-          this.setState(
-            {
-              ghostHighlight: { position: scaledPosition }
-            },
-            () => this.renderHighlights()
-          )
-      )
+    this.setState(
+      {
+        ghostHighlight: {position: scaledPosition, content}
+      },
+      () => this.renderHighlights()
     );
   };
 
@@ -511,7 +602,12 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
   }
 
   render() {
-    const { onSelectionFinished, enableAreaSelection } = this.props;
+    const {
+      onSelectionFinished,
+      enableAreaSelection,
+      scale,
+      rotate
+    } = this.props;
 
     return (
       <Pointable onPointerDown={this.onMouseDown}>
@@ -555,29 +651,19 @@ class PdfHighlighter<T_HT: T_Highlight> extends PureComponent<
                 const scaledPosition = this.viewportPositionToScaled(
                   viewportPosition
                 );
+                const image = this.screenshot(
+                  viewportPosition.boundingRect,
+                  page.number
+                );
 
-                const image = this.screenshot(pageBoundingRect, page.number);
-
-                this.renderTipAtPosition(
-                  viewportPosition,
-                  onSelectionFinished(
-                    scaledPosition,
-                    { image },
-                    () => this.hideTipAndSelection(),
-                    () =>
-                      this.setState(
-                        {
-                          ghostHighlight: {
-                            position: scaledPosition,
-                            content: { image }
-                          }
-                        },
-                        () => {
-                          resetSelection();
-                          this.renderHighlights();
-                        }
-                      )
-                  )
+                this.setState(
+                  {
+                    ghostHighlight: {position: scaledPosition, content: { image }}
+                  },
+                  () => {
+                    resetSelection();
+                    this.renderHighlights();
+                  }
                 );
               }}
             />
